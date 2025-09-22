@@ -12,7 +12,7 @@
         android:id="@+id/titleText"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="Truth Finder"
+        android:text="TruthLense"
         android:textColor="#000"
         android:textSize="34sp"
         android:textStyle="bold"
@@ -70,17 +70,15 @@
 
     <TextView
         android:id="@+id/textOut"
-        android:layout_width="357dp"
-        android:layout_height="426dp"
-        android:layout_marginStart="13dp"
-
+        android:layout_width="379dp"
+        android:layout_height="427dp"
         android:paddingTop="10dp"
         android:paddingBottom="10dp"
         app:layout_constraintBottom_toTopOf="@+id/etIn"
         app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintHorizontal_bias="0.0"
         app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@+id/titleText" />
+        app:layout_constraintTop_toBottomOf="@+id/textView" />
+
 
     <ImageButton
         android:id="@+id/btnSend"
@@ -105,5 +103,18 @@
         app:layout_constraintTop_toTopOf="parent"
         app:layout_constraintVertical_bias="0.028"
         app:srcCompat="@drawable/logo2" />
+
+    <TextView
+        android:id="@+id/textView"
+        android:layout_width="378dp"
+        android:layout_height="78dp"
+        android:layout_marginTop="36dp"
+        android:text="@string/descript"
+        android:textAlignment="center"
+        android:textSize="16sp"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintHorizontal_bias="0.461"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@+id/titleText" />
 
 </androidx.constraintlayout.widget.ConstraintLayout>
