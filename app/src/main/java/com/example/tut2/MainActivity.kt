@@ -43,19 +43,14 @@ class MainActivity : AppCompatActivity() {
             val userMsg = etIn.text.toString().trim()
 
             if (userMsg.isNotEmpty()) {
-                // eigene Nachricht anhängen und im TextView anzeigen
                 appendMessage("Du", userMsg)
 
-                // EditText leeren (optisch: Nachricht wurde "gesendet")
                 etIn.text.clear()
 
-                // harteingestellte (hardcoded) Antwort
                 val botReply = "Ich bin computer-generiert."
                 appendMessage("App", botReply)
 
-                // bei Bedarf: hier später Netzwerk-/Datenbank-Code einfügen
             } else {
-                // kurzes Feedback, falls nichts eingegeben wurde
                 etIn.error = "Bitte eine Nachricht eingeben"
             }
         }
@@ -66,7 +61,6 @@ class MainActivity : AppCompatActivity() {
         conversation.append("$sender: $message")
         textOut.text = conversation.toString()
 
-        // optional: Scrollen an Ende (falls nötig)
         textOut.post {
             val scrollAmount = textOut.layout?.getLineTop(textOut.lineCount) ?: 0
             if (scrollAmount > textOut.height) {
