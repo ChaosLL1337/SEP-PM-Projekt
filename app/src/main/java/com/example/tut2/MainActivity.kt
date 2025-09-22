@@ -9,10 +9,11 @@ import androidx.activity.enableEdgeToEdge
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
+import android.widget.ImageButton
 
 class MainActivity : AppCompatActivity() {
     private lateinit var etIn: EditText
-    private lateinit var btnSend: Button
+    private lateinit var btnSend: ImageButton
     private lateinit var textOut: TextView
 
     private val conversation = StringBuilder()
