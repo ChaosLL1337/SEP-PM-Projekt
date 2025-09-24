@@ -22,8 +22,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnSend: ImageButton
 
     private lateinit var chatRecycler: RecyclerView
-    private lateinit var chatInput: EditText
-    private lateinit var chatSend: ImageButton
+
     private lateinit var btnBack: ImageButton
 
     private val conversation = mutableListOf<Message>()
@@ -35,7 +34,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
+        setContentView(R.layout.activity_main)
         startScreen = findViewById(R.id.startScreen)
         chatScreen = findViewById(R.id.chatScreen)
 
@@ -43,8 +42,7 @@ class MainActivity : AppCompatActivity() {
         btnSend = findViewById(R.id.btnSend)
 
         chatRecycler = findViewById(R.id.chatRecycler)
-        chatInput = findViewById(R.id.chatInput)
-        chatSend = findViewById(R.id.chatSend)
+
         btnBack = findViewById(R.id.btnBack)
 
         chatAdapter = ChatAdapter(conversation)
@@ -70,11 +68,16 @@ class MainActivity : AppCompatActivity() {
         btnSend.setOnClickListener {
             val userMsg = etIn.text.toString().trim()
             if (userMsg.isNotEmpty()) {
+
+                // Neue Konversation starten
+                conversation.clear()
+                chatAdapter.notifyDataSetChanged() // Adapter leeren
+
                 // Screen wechseln
                 startScreen.visibility = View.GONE
                 chatScreen.visibility = View.VISIBLE
 
-                // Erste User-Nachricht ins Chatfenster setzen
+                // Erste Nachricht hinzufügen
                 conversation.add(Message("User", userMsg))
                 val botReply = "Ich bin computer-generiert."
                 conversation.add(Message("Bot", botReply))
@@ -84,19 +87,20 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        chatSend.setOnClickListener {
-            val userMsg = chatInput.text.toString().trim()
-            if (userMsg.isNotEmpty()) {
-                conversation.add(Message("User", userMsg))
-                chatInput.text.clear()
 
-                val botReply = "Antwort auf: $userMsg"
-                conversation.add(Message("Bot", botReply))
-
-                chatAdapter.notifyDataSetChanged()
-                chatRecycler.scrollToPosition(conversation.size - 1)
-            }
-        }
+//        chatSend.setOnClickListener {
+//            val userMsg = chatInput.text.toString().trim()
+//            if (userMsg.isNotEmpty()) {
+//                conversation.add(Message("User", userMsg))
+//                chatInput.text.clear()
+//
+//                val botReply = "Antwort auf: $userMsg"
+//                conversation.add(Message("Bot", botReply))
+//
+//                chatAdapter.notifyDataSetChanged()
+//                chatRecycler.scrollToPosition(conversation.size - 1)
+//            }
+//        }
 
         btnBack.setOnClickListener {
             chatScreen.visibility = View.GONE
@@ -121,9 +125,9 @@ class MainActivity : AppCompatActivity() {
 
 
 
-    override fun onSaveInstanceState(outState: Bundle) {
-        super.onSaveInstanceState(outState)
-        outState.putString("conversation", conversation.toString())
-        outState.putString("input", etIn.text.toString())
-    }
+//    override fun onSaveInstanceState(outState: Bundle) {
+//        super.onSaveInstanceState(outState)
+//        outState.putString("conversation", conversation.toString())
+//        outState.putString("input", etIn.text.toString())
+//    }
 }
