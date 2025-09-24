@@ -2,6 +2,7 @@ package com.example.tut2
 
 import android.os.Bundle
 import android.text.method.ScrollingMovementMethod
+import android.view.View
 import android.widget.Button
 import android.widget.EditText
 import android.widget.TextView
@@ -14,66 +15,99 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 
 class MainActivity : AppCompatActivity() {
+    private lateinit var startScreen: View
+    private lateinit var chatScreen: View
+
     private lateinit var etIn: EditText
     private lateinit var btnSend: ImageButton
 
-    private lateinit var textOut: RecyclerView
+    private lateinit var chatRecycler: RecyclerView
+    private lateinit var chatInput: EditText
+    private lateinit var chatSend: ImageButton
+    private lateinit var btnBack: ImageButton
+
     private val conversation = mutableListOf<Message>()
     private lateinit var chatAdapter: ChatAdapter
 
 
 
 
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
-        setContentView(R.layout.activity_main)
-        textOut = findViewById(R.id.textOut)
-        chatAdapter = ChatAdapter(conversation)
-        textOut.adapter = chatAdapter
-        textOut.layoutManager = LinearLayoutManager(this)
 
-        ViewCompat.setOnApplyWindowInsetsListener(findViewById(R.id.main)) { v, insets ->
-            val systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
-            v.setPadding(systemBars.left, systemBars.top, systemBars.right, systemBars.bottom)
-            insets
-        }
+        startScreen = findViewById(R.id.startScreen)
+        chatScreen = findViewById(R.id.chatScreen)
 
         etIn = findViewById(R.id.etIn)
         btnSend = findViewById(R.id.btnSend)
-        textOut = findViewById(R.id.textOut)
+
+        chatRecycler = findViewById(R.id.chatRecycler)
+        chatInput = findViewById(R.id.chatInput)
+        chatSend = findViewById(R.id.chatSend)
+        btnBack = findViewById(R.id.btnBack)
+
+        chatAdapter = ChatAdapter(conversation)
+        chatRecycler.adapter = chatAdapter
+        chatRecycler.layoutManager = LinearLayoutManager(this)
+
 
 
 
         if (savedInstanceState != null) {
             val savedConversation = savedInstanceState.getStringArrayList("conversation") ?: arrayListOf()
             savedConversation.forEach {
-                // Hier musst du die Nachricht mit Sender info wieder hinzufügen, z.B. "User: Hallo"
-                conversation.add(Message("User", it)) // Oder Bot, je nach Speicherung
+                conversation.add(Message("User", it)) // immer als User, Bot geht verloren
             }
             chatAdapter.notifyDataSetChanged()
-            textOut.scrollToPosition(conversation.size - 1)
+            chatRecycler.scrollToPosition(conversation.size - 1)
 
             etIn.setText(savedInstanceState.getString("input", ""))
         }
 
 
+
         btnSend.setOnClickListener {
             val userMsg = etIn.text.toString().trim()
             if (userMsg.isNotEmpty()) {
-                conversation.add(Message("User", userMsg))
-                etIn.text.clear()
+                // Screen wechseln
+                startScreen.visibility = View.GONE
+                chatScreen.visibility = View.VISIBLE
 
+                // Erste User-Nachricht ins Chatfenster setzen
+                conversation.add(Message("User", userMsg))
                 val botReply = "Ich bin computer-generiert."
                 conversation.add(Message("Bot", botReply))
 
                 chatAdapter.notifyDataSetChanged()
-                textOut.scrollToPosition(conversation.size - 1)
+                chatRecycler.scrollToPosition(conversation.size - 1)
             }
         }
 
-    }
+        chatSend.setOnClickListener {
+            val userMsg = chatInput.text.toString().trim()
+            if (userMsg.isNotEmpty()) {
+                conversation.add(Message("User", userMsg))
+                chatInput.text.clear()
 
+                val botReply = "Antwort auf: $userMsg"
+                conversation.add(Message("Bot", botReply))
+
+                chatAdapter.notifyDataSetChanged()
+                chatRecycler.scrollToPosition(conversation.size - 1)
+            }
+        }
+
+        btnBack.setOnClickListener {
+            chatScreen.visibility = View.GONE
+            startScreen.visibility = View.VISIBLE
+            etIn.text.clear()
+        }
+
+
+
+
+    }
     private fun appendMessage(sender: String, message: String) {
         // Neue Nachricht zur Liste hinzufügen
         conversation.add(Message(sender, message))
@@ -82,8 +116,9 @@ class MainActivity : AppCompatActivity() {
         chatAdapter.notifyItemInserted(conversation.size - 1)
 
         // Scrollen zum letzten Eintrag
-        textOut.scrollToPosition(conversation.size - 1)
+        chatRecycler.scrollToPosition(conversation.size - 1)
     }
+
 
 
     override fun onSaveInstanceState(outState: Bundle) {
