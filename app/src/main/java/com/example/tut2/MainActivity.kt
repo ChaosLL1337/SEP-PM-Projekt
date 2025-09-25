@@ -7,10 +7,10 @@ import android.media.AudioRecord
 import android.os.Bundle
 import android.view.View
 import android.widget.EditText
-import androidx.appcompat.app.AppCompatActivity
 import android.widget.ImageButton
 import androidx.activity.enableEdgeToEdge
 import androidx.annotation.RequiresPermission
+import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
@@ -35,7 +35,19 @@ class MainActivity : AppCompatActivity() {
     private var recordingThread: Thread? = null
     private var pcmOut: java.io.FileOutputStream? = null
 
-
+    // Permission launcher
+    private val requestPermissionsLauncher =
+        registerForActivityResult(
+            androidx.activity.result.contract.ActivityResultContracts.RequestMultiplePermissions()
+        ) { permissions ->
+            val granted = permissions[Manifest.permission.RECORD_AUDIO] ?: false
+            if (granted) {
+                @SuppressLint("MissingPermission")
+                startRecording()
+            } else {
+                etIn.setText("Mikrofonberechtigung verweigert")
+            }
+        }
 
     @SuppressLint("NotifyDataSetChanged")
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -55,28 +67,19 @@ class MainActivity : AppCompatActivity() {
         btnSend = findViewById(R.id.btnSend)
         btnAudio = findViewById(R.id.btnAudio)
         chatRecycler = findViewById(R.id.chatRecycler)
-
         btnBack = findViewById(R.id.btnBack)
 
         chatAdapter = ChatAdapter(conversation)
         chatRecycler.adapter = chatAdapter
         chatRecycler.layoutManager = LinearLayoutManager(this)
 
-
-
-
         if (savedInstanceState != null) {
             val savedConversation = savedInstanceState.getStringArrayList("conversation") ?: arrayListOf()
-            savedConversation.forEach {
-                conversation.add(Message("User", it)) // immer als User, Bot geht verloren
-            }
+            savedConversation.forEach { conversation.add(Message("User", it)) } // Bot geht verloren
             chatAdapter.notifyDataSetChanged()
             chatRecycler.scrollToPosition(conversation.size - 1)
-
             etIn.setText(savedInstanceState.getString("input", ""))
         }
-
-
 
         btnSend.setOnClickListener {
             val userMsg = etIn.text.toString().trim()
@@ -93,15 +96,13 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-
-
         btnBack.setOnClickListener {
             chatScreen.visibility = View.GONE
             startScreen.visibility = View.VISIBLE
             etIn.text.clear()
         }
 
-
+        // Mic-Button: Start ↔ Stop+Transkribieren
         btnAudio.setOnClickListener {
             if (!isRecording) {
                 if (checkPermissions()) {
@@ -111,10 +112,14 @@ class MainActivity : AppCompatActivity() {
                     requestPermissionsLauncher.launch(arrayOf(Manifest.permission.RECORD_AUDIO))
                 }
             } else {
-                stopRecordingAndTranscribe()
+                etIn.setText("Stoppe Aufnahme …")
+                btnAudio.isEnabled = false
+                btnAudio.contentDescription = "Stoppe & transkribiere"
+                stopRecordingAndTranscribeAsync() // → im Hintergrund
             }
         }
 
+        // Sanity-Check: Modell vorhanden?
         try {
             val ok = assets.list("models")?.contains("ggml-tiny.bin") == true
             if (!ok) {
@@ -123,37 +128,37 @@ class MainActivity : AppCompatActivity() {
         } catch (_: Throwable) { }
     }
 
-
-    private val requestPermissionsLauncher =
-        registerForActivityResult(
-            androidx.activity.result.contract.ActivityResultContracts.RequestMultiplePermissions()
-        ) { permissions ->
-            val granted = permissions[Manifest.permission.RECORD_AUDIO] ?: false
-            if (granted) {
-                @SuppressLint("MissingPermission")
-                startRecording()
-            }
-        }
-
-
-    private fun checkPermissions(): Boolean {
-        return ActivityCompat.checkSelfPermission(
-            this,
-            Manifest.permission.RECORD_AUDIO
-        ) == PackageManager.PERMISSION_GRANTED
+    override fun onDestroy() {
+        super.onDestroy()
+        // Aufräumen, falls Activity während Aufnahme geschlossen wird
+        isRecording = false
+        try { audioRecord?.stop() } catch (_: Throwable) { }
+        try { audioRecord?.release() } catch (_: Throwable) { }
+        audioRecord = null
+        try { recordingThread?.join(300) } catch (_: InterruptedException) { }
+        recordingThread = null
+        try { pcmOut?.close() } catch (_: Throwable) { }
+        pcmOut = null
     }
 
+    private fun checkPermissions(): Boolean {
+        return ActivityCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) ==
+                PackageManager.PERMISSION_GRANTED
+    }
 
     @RequiresPermission(Manifest.permission.RECORD_AUDIO)
     private fun startRecording() {
-        etIn.setText("[audio gestartet]")
+        etIn.setText("[Aufnahme gestartet – tippe erneut zum Stoppen]")
+        btnAudio.isEnabled = true
+        btnAudio.contentDescription = "Stopp"
+
         val sampleRate = 16000
         val minBuffer = AudioRecord.getMinBufferSize(
             sampleRate,
             android.media.AudioFormat.CHANNEL_IN_MONO,
             android.media.AudioFormat.ENCODING_PCM_16BIT
         )
-        if (minBuffer == android.media.AudioRecord.ERROR || minBuffer == android.media.AudioRecord.ERROR_BAD_VALUE) {
+        if (minBuffer == AudioRecord.ERROR || minBuffer == AudioRecord.ERROR_BAD_VALUE) {
             etIn.setText("Fehler: ungültige Buffergröße")
             return
         }
@@ -181,7 +186,7 @@ class MainActivity : AppCompatActivity() {
             audioRecord?.startRecording()
         } catch (t: Throwable) {
             isRecording = false
-            pcmOut?.close()
+            try { pcmOut?.close() } catch (_: Throwable) { }
             pcmOut = null
             etIn.setText("Fehler beim Starten der Aufnahme: ${t.message}")
             return
@@ -196,12 +201,10 @@ class MainActivity : AppCompatActivity() {
                     if (read > 0) {
                         pcmOut?.write(buffer, 0, read)
                     } else if (read == AudioRecord.ERROR_INVALID_OPERATION || read == AudioRecord.ERROR_BAD_VALUE) {
-                        // kurz warten, um busy loop zu vermeiden
                         try { Thread.sleep(5) } catch (_: InterruptedException) {}
                     }
                 }
-            } catch (t: Throwable) {
-                // Logging optional
+            } catch (_: Throwable) {
             } finally {
                 try { pcmOut?.flush() } catch (_: Throwable) {}
                 try { pcmOut?.close() } catch (_: Throwable) {}
@@ -210,18 +213,17 @@ class MainActivity : AppCompatActivity() {
         }.also { it.start() }
     }
 
-
-
-
+    // ---- Transkription im Hintergrund-Thread ----
     @SuppressLint("NotifyDataSetChanged")
-    private fun stopRecordingAndTranscribe() {
-        // Doppelaufrufe abfangen
+    private fun stopRecordingAndTranscribeAsync() {
+        // 1) Aufnahme sauber stoppen (kurz am UI)
         if (!isRecording && audioRecord == null) {
             etIn.setText("Keine laufende Aufnahme")
+            btnAudio.isEnabled = true
+            btnAudio.contentDescription = "Aufnahme starten"
             return
         }
 
-        // 1) Aufnahme sauber stoppen
         isRecording = false
         try {
             if (audioRecord?.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
@@ -231,81 +233,131 @@ class MainActivity : AppCompatActivity() {
         try { audioRecord?.release() } catch (_: Throwable) { }
         audioRecord = null
 
-        // 2) Thread beenden lassen und warten, bis Outputstream zu ist
         try { recordingThread?.join(1500) } catch (_: InterruptedException) { }
         recordingThread = null
 
-        // 3) PCM prüfen
-        val pcm = outputFile
-        if (pcm == null || !pcm.exists()) {
-            etIn.setText("Keine PCM-Datei gefunden")
-            return
-        }
-        if (pcm.length() < 320) { // ~10ms Guard; anpassen wenn nötig
-            etIn.setText("PCM-Datei zu klein (${pcm.length()} B)")
-            return
-        }
+        // 2) Schweres Zeug im Worker-Thread
+        Thread {
+            val ui = { block: () -> Unit -> runOnUiThread(block) }
 
-        // 4) WAV schreiben
-        val wavFile = File(filesDir, "recording.wav")
-        try {
-            AudioUtil.pcmToWav(
-                pcmFile = pcm,
-                wavFile = wavFile,
-                sampleRate = 16000,
-                channels = 1,
-                bitsPerSample = 16
-            )
-        } catch (e: Exception) {
-            etIn.setText("Fehler bei PCM→WAV: ${e.javaClass.simpleName}: ${e.message}")
-            return
-        }
+            val pcm = outputFile
+            if (pcm == null || !pcm.exists()) {
+                ui {
+                    etIn.setText("Keine PCM-Datei gefunden")
+                    btnAudio.isEnabled = true
+                    btnAudio.contentDescription = "Aufnahme starten"
+                }
+                return@Thread
+            }
+            if (pcm.length() < 320) {
+                ui {
+                    etIn.setText("PCM-Datei zu klein (${pcm.length()} B)")
+                    btnAudio.isEnabled = true
+                    btnAudio.contentDescription = "Aufnahme starten"
+                }
+                return@Thread
+            }
 
-        // 5) Modell aus Assets bereitstellen – vorher existiert es wirklich?
-        val hasModel = try {
-            assets.list("models")?.contains("ggml-tiny.bin") == true
-        } catch (_: Throwable) { false }
+            ui { etIn.setText("Konvertiere nach WAV …") }
 
-        if (!hasModel) {
-            etIn.setText("Modell nicht in assets/models/ggml-tiny.bin gefunden")
-            return
-        }
+            val wavFile = File(filesDir, "recording.wav")
+            try {
+                AudioUtil.pcmToWav(
+                    pcmFile = pcm,
+                    wavFile = wavFile,
+                    sampleRate = 16000,
+                    channels = 1,
+                    bitsPerSample = 16
+                )
+            } catch (e: Exception) {
+                ui {
+                    etIn.setText("Fehler bei PCM→WAV: ${e.javaClass.simpleName}: ${e.message}")
+                    btnAudio.isEnabled = true
+                    btnAudio.contentDescription = "Aufnahme starten"
+                }
+                return@Thread
+            }
 
-        val modelFile = try {
-            copyAssetToFiles("models/ggml-tiny.bin")
-        } catch (e: Exception) {
-            etIn.setText("Fehler beim Modellkopieren: ${e.javaClass.simpleName}: ${e.message}")
-            return
-        }
+            // Modell checken & kopieren
+            val hasModel = try {
+                assets.list("models")?.contains("ggml-tiny.bin") == true
+            } catch (_: Throwable) { false }
 
-        // 6) Whisper JNI aufrufen – hart absichern
-        val result: String = try {
-            // Falls die native Lib nicht geladen ist, knallt es hier:
-            WhisperBridge.transcribeWav(
-                modelPath = modelFile.absolutePath,
-                wavPath   = wavFile.absolutePath,
-                lang      = "de"
-            )
-        } catch (e: UnsatisfiedLinkError) {
-            etIn.setText("Native Lib nicht geladen oder ABI falsch: ${e.message}")
-            return
-        } catch (e: NoSuchMethodError) {
-            etIn.setText("Methodensignatur passt nicht zur JNI-Bridge: ${e.message}")
-            return
-        } catch (e: Exception) {
-            etIn.setText("Whisper-Fehler: ${e.javaClass.simpleName}: ${e.message}")
-            return
-        }
+            if (!hasModel) {
+                ui {
+                    etIn.setText("Modell nicht in assets/models/ggml-tiny.bin gefunden")
+                    btnAudio.isEnabled = true
+                    btnAudio.contentDescription = "Aufnahme starten"
+                }
+                return@Thread
+            }
 
-        etIn.setText(result.ifBlank { "[whisper] Kein Text erkannt" })
+            val modelFile = try {
+                copyAssetToFiles("models/ggml-tiny.bin")
+            } catch (e: Exception) {
+                ui {
+                    etIn.setText("Fehler beim Modellkopieren: ${e.javaClass.simpleName}: ${e.message}")
+                    btnAudio.isEnabled = true
+                    btnAudio.contentDescription = "Aufnahme starten"
+                }
+                return@Thread
+            }
+
+            ui { etIn.setText("Transkribiere …") }
+
+            val result: String = try {
+                WhisperBridge.transcribeWav(
+                    modelPath = modelFile.absolutePath,
+                    wavPath   = wavFile.absolutePath,
+                    lang      = "de"
+                )
+            } catch (e: UnsatisfiedLinkError) {
+                ui {
+                    etIn.setText("Native Lib nicht geladen oder ABI falsch: ${e.message}")
+                    btnAudio.isEnabled = true
+                    btnAudio.contentDescription = "Aufnahme starten"
+                }
+                return@Thread
+            } catch (e: NoSuchMethodError) {
+                ui {
+                    etIn.setText("Methodensignatur passt nicht zur JNI-Bridge: ${e.message}")
+                    btnAudio.isEnabled = true
+                    btnAudio.contentDescription = "Aufnahme starten"
+                }
+                return@Thread
+            } catch (e: Exception) {
+                ui {
+                    etIn.setText("Whisper-Fehler: ${e.javaClass.simpleName}: ${e.message}")
+                    btnAudio.isEnabled = true
+                    btnAudio.contentDescription = "Aufnahme starten"
+                }
+                return@Thread
+            }
+
+            // 3) Ergebnis ins UI (optional auch in den Chat)
+            ui {
+                val text = result.ifBlank { "[whisper] Kein Text erkannt" }
+                etIn.setText(text)
+
+                // Optional in die Chatliste pushen:
+                /*
+                startScreen.visibility = View.GONE
+                chatScreen.visibility = View.VISIBLE
+                conversation.add(Message("User", "[Sprachaufnahme]"))
+                conversation.add(Message("Bot", text))
+                chatAdapter.notifyDataSetChanged()
+                chatRecycler.scrollToPosition(conversation.size - 1)
+                */
+
+                btnAudio.isEnabled = true
+                btnAudio.contentDescription = "Aufnahme starten"
+            }
+        }.start()
     }
-
-
 
     private fun copyAssetToFiles(assetPath: String, overwrite: Boolean = false): File {
         val fileName = assetPath.substringAfterLast('/')
         val outFile = File(filesDir, fileName)
-
         if (outFile.exists() && !overwrite) return outFile
 
         assets.open(assetPath).use { inStream ->
