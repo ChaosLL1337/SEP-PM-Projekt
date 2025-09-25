@@ -1,6 +1,9 @@
 package com.example.tut2
 
 import android.Manifest
+import android.content.Context
+import android.content.pm.PackageManager
+import android.content.res.AssetManager
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
@@ -18,6 +21,8 @@ import android.widget.ImageButton
 import androidx.annotation.RequiresPermission
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
 
@@ -35,7 +40,7 @@ class MainActivity : AppCompatActivity() {
     external fun transcribeAudio(pcmPath: String, modelPath: String): String
 
     init {
-        System.loadLibrary("whisper") // lädt libwhisper.so
+        System.loadLibrary("whisper_bridge") // lädt libwhisper.so
     }
 
     @RequiresPermission(Manifest.permission.RECORD_AUDIO)
@@ -57,6 +62,11 @@ class MainActivity : AppCompatActivity() {
         chatAdapter = ChatAdapter(conversation)
         chatRecycler.adapter = chatAdapter
         chatRecycler.layoutManager = LinearLayoutManager(this)
+
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO)
+            != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), 100)
+        }
 
         copyModelIfNeeded()
 
@@ -117,14 +127,34 @@ class MainActivity : AppCompatActivity() {
             etIn.text.clear()
         }
 
-        btnAudio.setOnClickListener{
+        btnAudio.setOnClickListener {
+            // Mic-Permission simpel checken
+            if (checkSelfPermission(Manifest.permission.RECORD_AUDIO)
+                != PackageManager.PERMISSION_GRANTED) {
+                requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), 100)
+                return@setOnClickListener
+            }
+
             val pcmFile = File(cacheDir, "recording.pcm")
-            recordPcmToFile(pcmFile)
+            val modelFile = File(filesDir, "ggml-tiny.bin")
 
-            val modelFile = File(filesDir, "ggml-base.en.bin")
+            btnAudio.isSelected = true  // -> grün
 
-            val result = transcribeAudio(pcmFile.absolutePath, modelFile.absolutePath)
-            etIn.setText(result)
+            Thread {
+                try {
+                    // 5s aufnehmen (blockiert jetzt im Hintergrund-Thread)
+                    recordPcmToFile(pcmFile)
+
+                    // Whisper-Transkription (nativer Call) – ebenfalls im Hintergrund
+                    val result = transcribeAudio(pcmFile.absolutePath, modelFile.absolutePath)
+
+                    runOnUiThread {
+                        etIn.setText(result)
+                    }
+                } finally {
+                    runOnUiThread { btnAudio.isSelected = false } // -> wieder weiß
+                }
+            }.start()
         }
     }
 
@@ -136,42 +166,56 @@ class MainActivity : AppCompatActivity() {
             sampleRate,
             AudioFormat.CHANNEL_IN_MONO,
             AudioFormat.ENCODING_PCM_16BIT
-        )
+        ).coerceAtLeast(sampleRate / 2) // etwas großzügiger puffer
 
         val audioRecord = AudioRecord(
-            MediaRecorder.AudioSource.MIC,
+            MediaRecorder.AudioSource.VOICE_RECOGNITION, // besseres AGC/NS Profil
             sampleRate,
             AudioFormat.CHANNEL_IN_MONO,
             AudioFormat.ENCODING_PCM_16BIT,
             bufferSize
         )
 
-        val fos = FileOutputStream(file)
         val data = ByteArray(bufferSize)
-        audioRecord.startRecording()
+        val recordMillis = 5_000L
 
-        val recordMillis = 5000 // z.B. 5 Sekunden
-        val end = System.currentTimeMillis() + recordMillis
-        while (System.currentTimeMillis() < end) {
-            val read = audioRecord.read(data, 0, data.size)
-            if (read > 0) fos.write(data, 0, read)
+        FileOutputStream(file).use { fos ->
+            audioRecord.startRecording()
+            val end = System.currentTimeMillis() + recordMillis
+            while (System.currentTimeMillis() < end) {
+                val read = audioRecord.read(data, 0, data.size)
+                if (read > 0) fos.write(data, 0, read)
+            }
+            audioRecord.stop()
+            audioRecord.release()
         }
-
-        audioRecord.stop()
-        audioRecord.release()
-        fos.close()
     }
 
     fun copyModelIfNeeded() {
-        val modelFile = File(filesDir, "ggml-tiny.en.bin")
+        val modelFile = File(filesDir, "ggml-tiny.bin")
         if (!modelFile.exists()) {
-            assets.open("ggml-tiny.en.bin").use { input ->
+            assets.open("ggml-tiny.bin").use { input ->
                 FileOutputStream(modelFile).use { output ->
                     input.copyTo(output)
                 }
             }
         }
     }
+
+    private suspend fun ensureModelFile(context: Context, assetPath: String = "ggml-tiny.bin"): File {
+        val out = File(context.filesDir, assetPath.substringAfterLast('/'))
+        if (out.exists() && out.length() > 0L) return out
+
+        withContext(Dispatchers.IO) {
+            out.outputStream().use { fos ->
+                context.assets.open(assetPath, AssetManager.ACCESS_STREAMING).use { ins ->
+                    ins.copyTo(fos)
+                }
+            }
+        }
+        return out
+    }
+
 
 
     private fun appendMessage(sender: String, message: String) {

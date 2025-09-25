@@ -16,19 +16,21 @@ android {
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
+        ndk { abiFilters += listOf("arm64-v8a") }
         externalNativeBuild {
             cmake {
-                cppFlags += listOf("-std=c++11", "-O3") // Use += listOf() for clarity
+                cppFlags += listOf("-DANDROID_STL=c++_shared") // Use += listOf() for clarity
             }
         }
     }
 
     externalNativeBuild {
         cmake {
-            path = file("src/main/cpp/CMakeLists.txt") // Use file() for path clarity
-        }
+            cmake { path = file("src/main/cpp/CMakeLists.txt"); version = "3.22.1" }        }
     }
-    ndkVersion = "25.2.9519653" // Specify your desired NDK version
+    compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
+    kotlinOptions { jvmTarget = "17" }
+    ndkVersion = "25.2.9519653"
 
     buildTypes {
         release {
