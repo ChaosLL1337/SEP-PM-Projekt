@@ -2,5 +2,5 @@
     <string name="app_name">Tut2</string>
     <string name="descript">Willkommen bei TruthLense! TruthLense überprüft Fakten auf Korrektheit, Framing und Polarisierung. TruthLens möchte Nutzern helfen Aussagen kritisch zu hinterfragen und demokratische Werte zu fördern. Hinweis: TruthLense ist KI-basiert, daher kann keine Garantie für Korrektheit geboten werden. Bitte überprüfen Sie die Ergebnisse.</string>
     <string name="disclaimer">Hinweis: Fehler möglich, Antworten bitte immer überprüfen.</string>
-    <string name="disclaim">Hinweis: TruthFinder macht Fehler, bitte Antworten überprüfen.</string>
+    <string name="disclaim">Hinweis: TruthLense macht Fehler, bitte Antworten überprüfen.</string>
 </resources>
