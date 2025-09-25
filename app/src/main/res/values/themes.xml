@@ -1,9 +1,15 @@
-<resources xmlns:tools="http://schemas.android.com/tools">
-    <!-- Base application theme. -->
+<resources>
     <style name="Base.Theme.Tut2" parent="Theme.Material3.DayNight.NoActionBar">
-        <!-- Customize your light theme here. -->
-        <!-- <item name="colorPrimary">@color/my_light_primary</item> -->
+        <!-- Helle Farben -->
+        <item name="colorPrimary">@color/blue_500</item>
+        <item name="colorOnPrimary">@color/white</item>
+        <item name="colorSurface">@color/white</item>
+        <item name="colorOnSurface">@color/black</item>
+        <!-- Chat: User-Blase hell -->
+        <item name="colorPrimaryContainer">@color/blue_100</item>
+        <item name="colorOnPrimaryContainer">@color/black</item>
+        <!-- Chat: Bot-Blase grau -->
+        <item name="colorSurfaceVariant">@color/grey_100</item>
+        <item name="colorOnSurfaceVariant">@color/black</item>
     </style>
-
-    <style name="Theme.Tut2" parent="Base.Theme.Tut2" />
 </resources>
