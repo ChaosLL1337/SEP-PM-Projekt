@@ -101,6 +101,7 @@ class MainActivity : AppCompatActivity() {
         btnAudio.setOnClickListener {
             if (!isRecording) {
                 if (checkPermissions()) {
+                    @SuppressLint("MissingPermission")
                     startRecording()
                 } else {
                     requestPermissionsLauncher.launch(arrayOf(Manifest.permission.RECORD_AUDIO))
@@ -118,6 +119,7 @@ class MainActivity : AppCompatActivity() {
         ) { permissions ->
             val granted = permissions[Manifest.permission.RECORD_AUDIO] ?: false
             if (granted) {
+                @SuppressLint("MissingPermission")
                 startRecording()
             }
         }
@@ -133,6 +135,7 @@ class MainActivity : AppCompatActivity() {
 
     @RequiresPermission(Manifest.permission.RECORD_AUDIO)
     private fun startRecording() {
+        etIn.setText("[audio gestartet]")
         val sampleRate = 16000
         val bufferSize = AudioRecord.getMinBufferSize(
             sampleRate,
@@ -172,6 +175,7 @@ class MainActivity : AppCompatActivity() {
 
 
 
+    @SuppressLint("NotifyDataSetChanged")
     private fun stopRecordingAndTranscribe() {
         isRecording = false
         audioRecord?.stop()
@@ -186,9 +190,8 @@ class MainActivity : AppCompatActivity() {
         // val modelFile = File(filesDir, "ggml-base.bin")
         // val transcription = transcribeAudio(audioPath, modelFile.absolutePath)
 
-        conversation.add(Message("User", "[Spracheingabe beendet]"))
-        conversation.add(Message("Bot", "Transkription folgt hier…"))
-        chatAdapter.notifyDataSetChanged()
-        chatRecycler.scrollToPosition(conversation.size - 1)
+        etIn.setText("[Audio beendet]")
+
+
     }
 }
