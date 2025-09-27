@@ -96,7 +96,7 @@ static bool read_wav_mono16(const char* path, std::vector<float>& out, int& samp
 extern "C"
 JNIEXPORT jstring JNICALL
 Java_com_example_tut2_WhisperBridge_transcribeWav(
-        JNIEnv* env, jobject /*thiz*/,
+        JNIEnv* env, jobject thiz /*thiz*/,
         jstring jModelPath, jstring jWavPath, jstring jLang) {
 
     const char* modelPath = env->GetStringUTFChars(jModelPath, nullptr);

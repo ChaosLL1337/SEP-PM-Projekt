@@ -18,6 +18,9 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import java.io.File
 
+import retrofit2.Call
+import retrofit2.Callback
+import retrofit2.Response
 class MainActivity : AppCompatActivity() {
     private lateinit var startScreen: View
     private lateinit var chatScreen: View
@@ -34,6 +37,8 @@ class MainActivity : AppCompatActivity() {
     private var outputFile: File? = null
     private var recordingThread: Thread? = null
     private var pcmOut: java.io.FileOutputStream? = null
+
+    private lateinit var textOut: RecyclerView
 
     // Permission launcher
     private val requestPermissionsLauncher =
@@ -84,15 +89,38 @@ class MainActivity : AppCompatActivity() {
         btnSend.setOnClickListener {
             val userMsg = etIn.text.toString().trim()
             if (userMsg.isNotEmpty()) {
-                conversation.clear()
-                chatAdapter.notifyDataSetChanged()
+                // Switch to chat screen (like in demo)
                 startScreen.visibility = View.GONE
                 chatScreen.visibility = View.VISIBLE
+
                 conversation.add(Message("User", userMsg))
-                val botReply = "Ich bin computer-generiert."
-                conversation.add(Message("Bot", botReply))
+                etIn.text.clear()
                 chatAdapter.notifyDataSetChanged()
                 chatRecycler.scrollToPosition(conversation.size - 1)
+
+                // Anfrage an Python-Backend
+                RetrofitClient.instance.sendText(InputData(userMsg))
+                    .enqueue(object : Callback<ResponseData> {
+                        override fun onResponse(
+                            call: Call<ResponseData>,
+                            response: Response<ResponseData>
+                        ) {
+                            if (response.isSuccessful) {
+                                val botReply = response.body()?.response ?: "Fehler: keine Antwort"
+                                conversation.add(Message("Bot", botReply))
+                            } else {
+                                conversation.add(Message("Bot", "Fehlercode: ${response.code()}"))
+                            }
+                            chatAdapter.notifyDataSetChanged()
+                            chatRecycler.scrollToPosition(conversation.size - 1)
+                        }
+
+                        override fun onFailure(call: Call<ResponseData>, t: Throwable) {
+                            conversation.add(Message("Bot", "Fehler: ${t.message}"))
+                            chatAdapter.notifyDataSetChanged()
+                            chatRecycler.scrollToPosition(conversation.size - 1)
+                        }
+                    })
             }
         }
 
