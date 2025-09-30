@@ -16,11 +16,14 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
+import org.json.JSONArray
 import java.io.File
+import kotlin.math.abs
+import kotlin.math.log10
+import kotlin.math.max
+import kotlin.math.min
+import kotlin.math.sqrt
 
-import retrofit2.Call
-import retrofit2.Callback
-import retrofit2.Response
 class MainActivity : AppCompatActivity() {
     private lateinit var startScreen: View
     private lateinit var chatScreen: View
@@ -38,9 +41,8 @@ class MainActivity : AppCompatActivity() {
     private var recordingThread: Thread? = null
     private var pcmOut: java.io.FileOutputStream? = null
 
-    private lateinit var textOut: RecyclerView
+    private var sessionOffsetMs: Long = 0
 
-    // Permission launcher
     private val requestPermissionsLauncher =
         registerForActivityResult(
             androidx.activity.result.contract.ActivityResultContracts.RequestMultiplePermissions()
@@ -78,49 +80,15 @@ class MainActivity : AppCompatActivity() {
         chatRecycler.adapter = chatAdapter
         chatRecycler.layoutManager = LinearLayoutManager(this)
 
-        if (savedInstanceState != null) {
-            val savedConversation = savedInstanceState.getStringArrayList("conversation") ?: arrayListOf()
-            savedConversation.forEach { conversation.add(Message("User", it)) } // Bot geht verloren
-            chatAdapter.notifyDataSetChanged()
-            chatRecycler.scrollToPosition(conversation.size - 1)
-            etIn.setText(savedInstanceState.getString("input", ""))
-        }
-
         btnSend.setOnClickListener {
             val userMsg = etIn.text.toString().trim()
             if (userMsg.isNotEmpty()) {
-                // Switch to chat screen (like in demo)
                 startScreen.visibility = View.GONE
                 chatScreen.visibility = View.VISIBLE
-
                 conversation.add(Message("User", userMsg))
                 etIn.text.clear()
                 chatAdapter.notifyDataSetChanged()
                 chatRecycler.scrollToPosition(conversation.size - 1)
-
-                // Anfrage an Python-Backend
-                RetrofitClient.instance.sendText(InputData(userMsg))
-                    .enqueue(object : Callback<ResponseData> {
-                        override fun onResponse(
-                            call: Call<ResponseData>,
-                            response: Response<ResponseData>
-                        ) {
-                            if (response.isSuccessful) {
-                                val botReply = response.body()?.response ?: "Fehler: keine Antwort"
-                                conversation.add(Message("Bot", botReply))
-                            } else {
-                                conversation.add(Message("Bot", "Fehlercode: ${response.code()}"))
-                            }
-                            chatAdapter.notifyDataSetChanged()
-                            chatRecycler.scrollToPosition(conversation.size - 1)
-                        }
-
-                        override fun onFailure(call: Call<ResponseData>, t: Throwable) {
-                            conversation.add(Message("Bot", "Fehler: ${t.message}"))
-                            chatAdapter.notifyDataSetChanged()
-                            chatRecycler.scrollToPosition(conversation.size - 1)
-                        }
-                    })
             }
         }
 
@@ -130,7 +98,6 @@ class MainActivity : AppCompatActivity() {
             etIn.text.clear()
         }
 
-        // Mic-Button: Start ↔ Stop+Transkribieren
         btnAudio.setOnClickListener {
             if (!isRecording) {
                 if (checkPermissions()) {
@@ -142,30 +109,20 @@ class MainActivity : AppCompatActivity() {
             } else {
                 etIn.setText("Stoppe Aufnahme …")
                 btnAudio.isEnabled = false
-                btnAudio.contentDescription = "Stoppe & transkribiere"
-                stopRecordingAndTranscribeAsync() // → im Hintergrund
+                stopRecordingAndTranscribeAsync()
             }
         }
-
-        // Sanity-Check: Modell vorhanden?
-        try {
-            val ok = assets.list("models")?.contains("ggml-tiny.bin") == true
-            if (!ok) {
-                etIn.setText("Hinweis: assets/models/ggml-tiny.bin fehlt")
-            }
-        } catch (_: Throwable) { }
     }
 
     override fun onDestroy() {
         super.onDestroy()
-        // Aufräumen, falls Activity während Aufnahme geschlossen wird
         isRecording = false
-        try { audioRecord?.stop() } catch (_: Throwable) { }
-        try { audioRecord?.release() } catch (_: Throwable) { }
+        try { audioRecord?.stop() } catch (_: Throwable) {}
+        try { audioRecord?.release() } catch (_: Throwable) {}
         audioRecord = null
-        try { recordingThread?.join(300) } catch (_: InterruptedException) { }
+        try { recordingThread?.join(300) } catch (_: InterruptedException) {}
         recordingThread = null
-        try { pcmOut?.close() } catch (_: Throwable) { }
+        try { pcmOut?.close() } catch (_: Throwable) {}
         pcmOut = null
     }
 
@@ -178,7 +135,6 @@ class MainActivity : AppCompatActivity() {
     private fun startRecording() {
         etIn.setText("[Aufnahme gestartet – tippe erneut zum Stoppen]")
         btnAudio.isEnabled = true
-        btnAudio.contentDescription = "Stopp"
 
         val sampleRate = 16000
         val minBuffer = AudioRecord.getMinBufferSize(
@@ -186,7 +142,7 @@ class MainActivity : AppCompatActivity() {
             android.media.AudioFormat.CHANNEL_IN_MONO,
             android.media.AudioFormat.ENCODING_PCM_16BIT
         )
-        if (minBuffer == AudioRecord.ERROR || minBuffer == AudioRecord.ERROR_BAD_VALUE) {
+        if (minBuffer <= 0) {
             etIn.setText("Fehler: ungültige Buffergröße")
             return
         }
@@ -198,11 +154,8 @@ class MainActivity : AppCompatActivity() {
             android.media.AudioFormat.ENCODING_PCM_16BIT,
             minBuffer
         )
-
         if (audioRecord?.state != AudioRecord.STATE_INITIALIZED) {
             etIn.setText("Fehler: AudioRecord nicht initialisiert")
-            audioRecord?.release()
-            audioRecord = null
             return
         }
 
@@ -210,29 +163,15 @@ class MainActivity : AppCompatActivity() {
         pcmOut = outputFile!!.outputStream()
 
         isRecording = true
-        try {
-            audioRecord?.startRecording()
-        } catch (t: Throwable) {
-            isRecording = false
-            try { pcmOut?.close() } catch (_: Throwable) { }
-            pcmOut = null
-            etIn.setText("Fehler beim Starten der Aufnahme: ${t.message}")
-            return
-        }
+        audioRecord?.startRecording()
 
-        // Aufnahme-Thread
         recordingThread = Thread {
             val buffer = ByteArray(minBuffer)
             try {
                 while (isRecording) {
                     val read = audioRecord?.read(buffer, 0, buffer.size) ?: 0
-                    if (read > 0) {
-                        pcmOut?.write(buffer, 0, read)
-                    } else if (read == AudioRecord.ERROR_INVALID_OPERATION || read == AudioRecord.ERROR_BAD_VALUE) {
-                        try { Thread.sleep(5) } catch (_: InterruptedException) {}
-                    }
+                    if (read > 0) pcmOut?.write(buffer, 0, read)
                 }
-            } catch (_: Throwable) {
             } finally {
                 try { pcmOut?.flush() } catch (_: Throwable) {}
                 try { pcmOut?.close() } catch (_: Throwable) {}
@@ -241,144 +180,64 @@ class MainActivity : AppCompatActivity() {
         }.also { it.start() }
     }
 
-    // ---- Transkription im Hintergrund-Thread ----
     @SuppressLint("NotifyDataSetChanged")
     private fun stopRecordingAndTranscribeAsync() {
-        // 1) Aufnahme sauber stoppen (kurz am UI)
-        if (!isRecording && audioRecord == null) {
-            etIn.setText("Keine laufende Aufnahme")
-            btnAudio.isEnabled = true
-            btnAudio.contentDescription = "Aufnahme starten"
-            return
-        }
-
         isRecording = false
-        try {
-            if (audioRecord?.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
-                audioRecord?.stop()
-            }
-        } catch (_: Throwable) { }
-        try { audioRecord?.release() } catch (_: Throwable) { }
+        try { audioRecord?.stop() } catch (_: Throwable) {}
+        try { audioRecord?.release() } catch (_: Throwable) {}
         audioRecord = null
-
-        try { recordingThread?.join(1500) } catch (_: InterruptedException) { }
+        try { recordingThread?.join(1500) } catch (_: Throwable) {}
         recordingThread = null
 
-        // 2) Schweres Zeug im Worker-Thread
         Thread {
-            val ui = { block: () -> Unit -> runOnUiThread(block) }
-
             val pcm = outputFile
             if (pcm == null || !pcm.exists()) {
-                ui {
-                    etIn.setText("Keine PCM-Datei gefunden")
-                    btnAudio.isEnabled = true
-                    btnAudio.contentDescription = "Aufnahme starten"
-                }
+                runOnUiThread { etIn.setText("Keine PCM-Datei gefunden") }
                 return@Thread
             }
-            if (pcm.length() < 320) {
-                ui {
-                    etIn.setText("PCM-Datei zu klein (${pcm.length()} B)")
-                    btnAudio.isEnabled = true
-                    btnAudio.contentDescription = "Aufnahme starten"
-                }
-                return@Thread
-            }
-
-            ui { etIn.setText("Konvertiere nach WAV …") }
 
             val wavFile = File(filesDir, "recording.wav")
             try {
-                AudioUtil.pcmToWav(
-                    pcmFile = pcm,
-                    wavFile = wavFile,
-                    sampleRate = 16000,
-                    channels = 1,
-                    bitsPerSample = 16
+                AudioUtil.pcmToWav(pcm, wavFile, 16000, 1, 16)
+            } catch (e: Exception) {
+                runOnUiThread { etIn.setText("Fehler PCM→WAV: ${e.message}") }
+                return@Thread
+            }
+
+            val modelFile = copyAssetToFiles("models/ggml-tiny.bin")
+
+            // Segmente als JSON vom JNI holen
+            val jsonStr = WhisperBridge.transcribeWavSegments(
+                modelFile.absolutePath, wavFile.absolutePath, "de"
+            )
+            val arr = JSONArray(jsonStr)
+            val segments = mutableListOf<Utterance>()
+            for (i in 0 until arr.length()) {
+                val o = arr.getJSONObject(i)
+                segments.add(
+                    Utterance(
+                        o.getLong("t0_ms"),
+                        o.getLong("t1_ms"),
+                        o.getString("text")
+                    )
                 )
-            } catch (e: Exception) {
-                ui {
-                    etIn.setText("Fehler bei PCM→WAV: ${e.javaClass.simpleName}: ${e.message}")
-                    btnAudio.isEnabled = true
-                    btnAudio.contentDescription = "Aufnahme starten"
-                }
-                return@Thread
             }
 
-            // Modell checken & kopieren
-            val hasModel = try {
-                assets.list("models")?.contains("ggml-tiny.bin") == true
-            } catch (_: Throwable) { false }
+            assignSpeakersForUtterances(segments, wavFile, 16000)
 
-            if (!hasModel) {
-                ui {
-                    etIn.setText("Modell nicht in assets/models/ggml-tiny.bin gefunden")
-                    btnAudio.isEnabled = true
-                    btnAudio.contentDescription = "Aufnahme starten"
-                }
-                return@Thread
+            // Render mit Absätzen
+            val sb = StringBuilder()
+            var lastSpk = -1
+            for (u in segments) {
+                if (lastSpk != -1 && u.speaker != lastSpk) sb.append("\n")
+                val tag = when (u.speaker) { 0 -> "Sprecher 1"; 1 -> "Sprecher 2"; else -> "?" }
+                sb.append("[$tag] ").append(u.text.trim()).append("\n")
+                lastSpk = u.speaker
             }
 
-            val modelFile = try {
-                copyAssetToFiles("models/ggml-tiny.bin")
-            } catch (e: Exception) {
-                ui {
-                    etIn.setText("Fehler beim Modellkopieren: ${e.javaClass.simpleName}: ${e.message}")
-                    btnAudio.isEnabled = true
-                    btnAudio.contentDescription = "Aufnahme starten"
-                }
-                return@Thread
-            }
-
-            ui { etIn.setText("Transkribiere …") }
-
-            val result: String = try {
-                WhisperBridge.transcribeWav(
-                    modelPath = modelFile.absolutePath,
-                    wavPath   = wavFile.absolutePath,
-                    lang      = "de"
-                )
-            } catch (e: UnsatisfiedLinkError) {
-                ui {
-                    etIn.setText("Native Lib nicht geladen oder ABI falsch: ${e.message}")
-                    btnAudio.isEnabled = true
-                    btnAudio.contentDescription = "Aufnahme starten"
-                }
-                return@Thread
-            } catch (e: NoSuchMethodError) {
-                ui {
-                    etIn.setText("Methodensignatur passt nicht zur JNI-Bridge: ${e.message}")
-                    btnAudio.isEnabled = true
-                    btnAudio.contentDescription = "Aufnahme starten"
-                }
-                return@Thread
-            } catch (e: Exception) {
-                ui {
-                    etIn.setText("Whisper-Fehler: ${e.javaClass.simpleName}: ${e.message}")
-                    btnAudio.isEnabled = true
-                    btnAudio.contentDescription = "Aufnahme starten"
-                }
-                return@Thread
-            }
-
-            // 3) Ergebnis ins UI (optional auch in den Chat)
-            ui {
-                val text = result.ifBlank { "[whisper] Kein Text erkannt" }
-                etIn.setText(text)
-
-                // Optional in die Chatliste pushen:
-                /*
-                startScreen.visibility = View.GONE
-                chatScreen.visibility = View.VISIBLE
-                conversation.add(Message("User", "[Sprachaufnahme]"))
-                conversation.add(Message("Bot", text))
-                chatAdapter.notifyDataSetChanged()
-                chatRecycler.scrollToPosition(conversation.size - 1)
-                */
-
+            runOnUiThread {
+                etIn.setText(sb.toString().trim())
                 btnAudio.isEnabled = true
-                btnAudio.contentDescription = "Aufnahme starten"
             }
         }.start()
     }
@@ -387,7 +246,6 @@ class MainActivity : AppCompatActivity() {
         val fileName = assetPath.substringAfterLast('/')
         val outFile = File(filesDir, fileName)
         if (outFile.exists() && !overwrite) return outFile
-
         assets.open(assetPath).use { inStream ->
             outFile.outputStream().use { outStream ->
                 val buf = ByteArray(32 * 1024)
@@ -395,9 +253,85 @@ class MainActivity : AppCompatActivity() {
                 while (inStream.read(buf).also { r = it } != -1) {
                     outStream.write(buf, 0, r)
                 }
-                outStream.flush()
             }
         }
         return outFile
+    }
+
+    // --- Speaker Assignment ---
+    data class Utterance(val t0_ms: Long, val t1_ms: Long, val text: String, var speaker: Int = -1)
+
+    private fun assignSpeakersForUtterances(
+        utts: List<Utterance>,
+        wavFile: File,
+        sampleRate: Int,
+        pauseMsThreshold: Long = 200L,
+        dbDeltaThreshold: Float = 6f
+    ) {
+        if (utts.isEmpty()) return
+        val pcm = readPcm16FromWav(wavFile) ?: return
+
+        fun slice(startMs: Long, endMs: Long): ShortArray {
+            val i0 = ((startMs * sampleRate) / 1000).toInt().coerceIn(0, pcm.size)
+            val i1 = ((endMs * sampleRate) / 1000).toInt().coerceIn(i0, pcm.size)
+            return pcm.copyOfRange(i0, i1)
+        }
+
+        val levels = utts.map { rmsDb(slice(it.t0_ms, it.t1_ms)) }
+        var spk = 0
+        utts[0].speaker = spk
+        var prevDb = levels[0]
+
+        for (i in 1 until utts.size) {
+            val prev = utts[i - 1]
+            val cur = utts[i]
+            val gap = cur.t0_ms - prev.t1_ms
+            val db = levels[i]
+            if (gap >= pauseMsThreshold || abs(db - prevDb) >= dbDeltaThreshold) {
+                spk = 1 - spk
+            }
+            cur.speaker = spk
+            prevDb = db
+        }
+    }
+
+    private fun rmsDb(samples: ShortArray): Float {
+        if (samples.isEmpty()) return -120f
+        var sum = 0.0
+        for (s in samples) sum += (s * s).toDouble()
+        val mean = sum / samples.size
+        val rms = sqrt(mean)
+        val db = 20 * log10((rms / Short.MAX_VALUE).coerceAtMost(1.0))
+        return if (db.isFinite()) db.toFloat() else -120f
+    }
+
+    private fun readPcm16FromWav(file: File): ShortArray? {
+        val bytes = file.readBytes()
+        if (bytes.size < 44) return null
+        var pos = 12
+        while (pos + 8 <= bytes.size) {
+            val id = String(bytes, pos, 4)
+            val sz = toIntLE(bytes, pos + 4)
+            pos += 8
+            if (id == "data") {
+                val dataStart = pos
+                val dataEnd = (pos + sz).coerceAtMost(bytes.size)
+                val pcmBytes = bytes.copyOfRange(dataStart, dataEnd)
+                val bb = java.nio.ByteBuffer.wrap(pcmBytes).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+                val out = ShortArray(pcmBytes.size / 2)
+                bb.asShortBuffer().get(out)
+                return out
+            } else {
+                pos += sz
+            }
+        }
+        return null
+    }
+
+    private fun toIntLE(b: ByteArray, off: Int): Int {
+        return (b[off].toInt() and 0xff) or
+                ((b[off + 1].toInt() and 0xff) shl 8) or
+                ((b[off + 2].toInt() and 0xff) shl 16) or
+                ((b[off + 3].toInt() and 0xff) shl 24)
     }
 }

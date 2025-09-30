@@ -6,4 +6,5 @@ object WhisperBridge {
     }
 
     external fun transcribeWav(modelPath: String, wavPath: String, lang: String): String
+    external fun transcribeWavSegments(modelPath: String, wavPath: String, lang: String): String
 }
