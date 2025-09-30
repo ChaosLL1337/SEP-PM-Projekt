@@ -16,21 +16,28 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
+import org.json.JSONArray
 import java.io.File
+import kotlin.math.log10
+import kotlin.math.sqrt
 
+// Retrofit: IMPORTS NICHT VERGESSEN
 import retrofit2.Call
 import retrofit2.Callback
 import retrofit2.Response
+
 class MainActivity : AppCompatActivity() {
+
     private lateinit var startScreen: View
     private lateinit var chatScreen: View
     private lateinit var etIn: EditText
     private lateinit var btnSend: ImageButton
     private lateinit var chatRecycler: RecyclerView
     private lateinit var btnBack: ImageButton
+    private lateinit var btnAudio: ImageButton
+
     private val conversation = mutableListOf<Message>()
     private lateinit var chatAdapter: ChatAdapter
-    private lateinit var btnAudio: ImageButton
 
     @Volatile private var isRecording = false
     private var audioRecord: AudioRecord? = null
@@ -38,9 +45,6 @@ class MainActivity : AppCompatActivity() {
     private var recordingThread: Thread? = null
     private var pcmOut: java.io.FileOutputStream? = null
 
-    private lateinit var textOut: RecyclerView
-
-    // Permission launcher
     private val requestPermissionsLauncher =
         registerForActivityResult(
             androidx.activity.result.contract.ActivityResultContracts.RequestMultiplePermissions()
@@ -54,20 +58,18 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-    @SuppressLint("NotifyDataSetChanged")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContentView(R.layout.activity_main)
         ViewCompat.setOnApplyWindowInsetsListener(findViewById(R.id.main)) { v, insets ->
-            val systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
-            v.setPadding(systemBars.left, systemBars.top, systemBars.right, systemBars.bottom)
+            val sysBars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
+            v.setPadding(sysBars.left, sysBars.top, sysBars.right, sysBars.bottom)
             insets
         }
 
         startScreen = findViewById(R.id.startScreen)
         chatScreen = findViewById(R.id.chatScreen)
-
         etIn = findViewById(R.id.etIn)
         btnSend = findViewById(R.id.btnSend)
         btnAudio = findViewById(R.id.btnAudio)
@@ -78,50 +80,41 @@ class MainActivity : AppCompatActivity() {
         chatRecycler.adapter = chatAdapter
         chatRecycler.layoutManager = LinearLayoutManager(this)
 
-        if (savedInstanceState != null) {
-            val savedConversation = savedInstanceState.getStringArrayList("conversation") ?: arrayListOf()
-            savedConversation.forEach { conversation.add(Message("User", it)) } // Bot geht verloren
-            chatAdapter.notifyDataSetChanged()
-            chatRecycler.scrollToPosition(conversation.size - 1)
-            etIn.setText(savedInstanceState.getString("input", ""))
-        }
-
+        // Senden
         btnSend.setOnClickListener {
             val userMsg = etIn.text.toString().trim()
-            if (userMsg.isNotEmpty()) {
-                // Switch to chat screen (like in demo)
-                startScreen.visibility = View.GONE
-                chatScreen.visibility = View.VISIBLE
+            if (userMsg.isEmpty()) return@setOnClickListener
 
-                conversation.add(Message("User", userMsg))
-                etIn.text.clear()
-                chatAdapter.notifyDataSetChanged()
-                chatRecycler.scrollToPosition(conversation.size - 1)
+            startScreen.visibility = View.GONE
+            chatScreen.visibility = View.VISIBLE
 
-                // Anfrage an Python-Backend
-                RetrofitClient.instance.sendText(InputData(userMsg))
-                    .enqueue(object : Callback<ResponseData> {
-                        override fun onResponse(
-                            call: Call<ResponseData>,
-                            response: Response<ResponseData>
-                        ) {
-                            if (response.isSuccessful) {
-                                val botReply = response.body()?.response ?: "Fehler: keine Antwort"
-                                conversation.add(Message("Bot", botReply))
-                            } else {
-                                conversation.add(Message("Bot", "Fehlercode: ${response.code()}"))
-                            }
-                            chatAdapter.notifyDataSetChanged()
-                            chatRecycler.scrollToPosition(conversation.size - 1)
+            conversation.add(Message("User", userMsg))
+            etIn.text.clear()
+            chatAdapter.notifyDataSetChanged()
+            chatRecycler.scrollToPosition(conversation.size - 1)
+
+            RetrofitClient.instance.sendText(InputData(userMsg))
+                .enqueue(object : Callback<ResponseData> {
+                    override fun onResponse(
+                        call: Call<ResponseData>,
+                        response: Response<ResponseData>
+                    ) {
+                        val reply = if (response.isSuccessful) {
+                            response.body()?.response ?: "Fehler: keine Antwort"
+                        } else {
+                            "Fehlercode: ${response.code()}"
                         }
+                        conversation.add(Message("Bot", reply))
+                        chatAdapter.notifyDataSetChanged()
+                        chatRecycler.scrollToPosition(conversation.size - 1)
+                    }
 
-                        override fun onFailure(call: Call<ResponseData>, t: Throwable) {
-                            conversation.add(Message("Bot", "Fehler: ${t.message}"))
-                            chatAdapter.notifyDataSetChanged()
-                            chatRecycler.scrollToPosition(conversation.size - 1)
-                        }
-                    })
-            }
+                    override fun onFailure(call: Call<ResponseData>, t: Throwable) {
+                        conversation.add(Message("Bot", "Fehler: ${t.message}"))
+                        chatAdapter.notifyDataSetChanged()
+                        chatRecycler.scrollToPosition(conversation.size - 1)
+                    }
+                })
         }
 
         btnBack.setOnClickListener {
@@ -130,7 +123,7 @@ class MainActivity : AppCompatActivity() {
             etIn.text.clear()
         }
 
-        // Mic-Button: Start ↔ Stop+Transkribieren
+        // Mic-Button
         btnAudio.setOnClickListener {
             if (!isRecording) {
                 if (checkPermissions()) {
@@ -142,44 +135,35 @@ class MainActivity : AppCompatActivity() {
             } else {
                 etIn.setText("Stoppe Aufnahme …")
                 btnAudio.isEnabled = false
-                btnAudio.contentDescription = "Stoppe & transkribiere"
-                stopRecordingAndTranscribeAsync() // → im Hintergrund
+                stopRecordingAndTranscribeAsync()
             }
         }
-
-        // Sanity-Check: Modell vorhanden?
-        try {
-            val ok = assets.list("models")?.contains("ggml-tiny.bin") == true
-            if (!ok) {
-                etIn.setText("Hinweis: assets/models/ggml-tiny.bin fehlt")
-            }
-        } catch (_: Throwable) { }
     }
 
     override fun onDestroy() {
         super.onDestroy()
-        // Aufräumen, falls Activity während Aufnahme geschlossen wird
         isRecording = false
-        try { audioRecord?.stop() } catch (_: Throwable) { }
-        try { audioRecord?.release() } catch (_: Throwable) { }
+        try { audioRecord?.stop() } catch (_: Throwable) {}
+        try { audioRecord?.release() } catch (_: Throwable) {}
         audioRecord = null
-        try { recordingThread?.join(300) } catch (_: InterruptedException) { }
+        try { recordingThread?.join(300) } catch (_: InterruptedException) {}
         recordingThread = null
-        try { pcmOut?.close() } catch (_: Throwable) { }
+        try { pcmOut?.close() } catch (_: Throwable) {}
         pcmOut = null
     }
 
-    private fun checkPermissions(): Boolean {
-        return ActivityCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) ==
+    private fun checkPermissions() =
+        ActivityCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) ==
                 PackageManager.PERMISSION_GRANTED
-    }
 
     @RequiresPermission(Manifest.permission.RECORD_AUDIO)
     private fun startRecording() {
-        etIn.setText("[Aufnahme gestartet – tippe erneut zum Stoppen]")
-        btnAudio.isEnabled = true
-        btnAudio.contentDescription = "Stopp"
+        // *** Letzte Konversation löschen ***
+        conversation.clear()
+        chatAdapter.notifyDataSetChanged()
+        etIn.setText("")
 
+        etIn.setText("[Aufnahme gestartet – tippe erneut zum Stoppen]")
         val sampleRate = 16000
         val minBuffer = AudioRecord.getMinBufferSize(
             sampleRate,
@@ -198,7 +182,6 @@ class MainActivity : AppCompatActivity() {
             android.media.AudioFormat.ENCODING_PCM_16BIT,
             minBuffer
         )
-
         if (audioRecord?.state != AudioRecord.STATE_INITIALIZED) {
             etIn.setText("Fehler: AudioRecord nicht initialisiert")
             audioRecord?.release()
@@ -214,13 +197,12 @@ class MainActivity : AppCompatActivity() {
             audioRecord?.startRecording()
         } catch (t: Throwable) {
             isRecording = false
-            try { pcmOut?.close() } catch (_: Throwable) { }
+            try { pcmOut?.close() } catch (_: Throwable) {}
             pcmOut = null
             etIn.setText("Fehler beim Starten der Aufnahme: ${t.message}")
             return
         }
 
-        // Aufnahme-Thread
         recordingThread = Thread {
             val buffer = ByteArray(minBuffer)
             try {
@@ -228,7 +210,8 @@ class MainActivity : AppCompatActivity() {
                     val read = audioRecord?.read(buffer, 0, buffer.size) ?: 0
                     if (read > 0) {
                         pcmOut?.write(buffer, 0, read)
-                    } else if (read == AudioRecord.ERROR_INVALID_OPERATION || read == AudioRecord.ERROR_BAD_VALUE) {
+                    } else if (read == AudioRecord.ERROR_INVALID_OPERATION ||
+                        read == AudioRecord.ERROR_BAD_VALUE) {
                         try { Thread.sleep(5) } catch (_: InterruptedException) {}
                     }
                 }
@@ -241,163 +224,136 @@ class MainActivity : AppCompatActivity() {
         }.also { it.start() }
     }
 
-    // ---- Transkription im Hintergrund-Thread ----
-    @SuppressLint("NotifyDataSetChanged")
     private fun stopRecordingAndTranscribeAsync() {
-        // 1) Aufnahme sauber stoppen (kurz am UI)
-        if (!isRecording && audioRecord == null) {
-            etIn.setText("Keine laufende Aufnahme")
-            btnAudio.isEnabled = true
-            btnAudio.contentDescription = "Aufnahme starten"
-            return
-        }
-
         isRecording = false
-        try {
-            if (audioRecord?.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
-                audioRecord?.stop()
-            }
-        } catch (_: Throwable) { }
-        try { audioRecord?.release() } catch (_: Throwable) { }
+        try { if (audioRecord?.recordingState == AudioRecord.RECORDSTATE_RECORDING) audioRecord?.stop() } catch (_: Throwable) {}
+        try { audioRecord?.release() } catch (_: Throwable) {}
         audioRecord = null
-
-        try { recordingThread?.join(1500) } catch (_: InterruptedException) { }
+        try { recordingThread?.join(1500) } catch (_: InterruptedException) {}
         recordingThread = null
 
-        // 2) Schweres Zeug im Worker-Thread
         Thread {
             val ui = { block: () -> Unit -> runOnUiThread(block) }
 
             val pcm = outputFile
-            if (pcm == null || !pcm.exists()) {
+            if (pcm == null || !pcm.exists() || pcm.length() < 320) {
                 ui {
-                    etIn.setText("Keine PCM-Datei gefunden")
+                    etIn.setText("Keine gültige PCM-Datei gefunden")
                     btnAudio.isEnabled = true
-                    btnAudio.contentDescription = "Aufnahme starten"
                 }
                 return@Thread
             }
-            if (pcm.length() < 320) {
-                ui {
-                    etIn.setText("PCM-Datei zu klein (${pcm.length()} B)")
-                    btnAudio.isEnabled = true
-                    btnAudio.contentDescription = "Aufnahme starten"
-                }
-                return@Thread
-            }
-
-            ui { etIn.setText("Konvertiere nach WAV …") }
 
             val wavFile = File(filesDir, "recording.wav")
             try {
-                AudioUtil.pcmToWav(
-                    pcmFile = pcm,
-                    wavFile = wavFile,
-                    sampleRate = 16000,
-                    channels = 1,
-                    bitsPerSample = 16
-                )
+                AudioUtil.pcmToWav(pcm, wavFile, 16000, 1, 16)
             } catch (e: Exception) {
                 ui {
-                    etIn.setText("Fehler bei PCM→WAV: ${e.javaClass.simpleName}: ${e.message}")
+                    etIn.setText("Fehler bei PCM→WAV: ${e.message}")
                     btnAudio.isEnabled = true
-                    btnAudio.contentDescription = "Aufnahme starten"
                 }
                 return@Thread
             }
 
-            // Modell checken & kopieren
-            val hasModel = try {
-                assets.list("models")?.contains("ggml-tiny.bin") == true
-            } catch (_: Throwable) { false }
-
-            if (!hasModel) {
+            val modelFile = try { copyAssetToFiles("models/ggml-tiny.bin") } catch (e: Exception) {
                 ui {
-                    etIn.setText("Modell nicht in assets/models/ggml-tiny.bin gefunden")
+                    etIn.setText("Modellkopie fehlgeschlagen: ${e.message}")
                     btnAudio.isEnabled = true
-                    btnAudio.contentDescription = "Aufnahme starten"
                 }
                 return@Thread
             }
 
-            val modelFile = try {
-                copyAssetToFiles("models/ggml-tiny.bin")
-            } catch (e: Exception) {
-                ui {
-                    etIn.setText("Fehler beim Modellkopieren: ${e.javaClass.simpleName}: ${e.message}")
-                    btnAudio.isEnabled = true
-                    btnAudio.contentDescription = "Aufnahme starten"
-                }
-                return@Thread
-            }
-
-            ui { etIn.setText("Transkribiere …") }
-
-            val result: String = try {
-                WhisperBridge.transcribeWav(
-                    modelPath = modelFile.absolutePath,
-                    wavPath   = wavFile.absolutePath,
-                    lang      = "de"
-                )
-            } catch (e: UnsatisfiedLinkError) {
-                ui {
-                    etIn.setText("Native Lib nicht geladen oder ABI falsch: ${e.message}")
-                    btnAudio.isEnabled = true
-                    btnAudio.contentDescription = "Aufnahme starten"
-                }
-                return@Thread
-            } catch (e: NoSuchMethodError) {
-                ui {
-                    etIn.setText("Methodensignatur passt nicht zur JNI-Bridge: ${e.message}")
-                    btnAudio.isEnabled = true
-                    btnAudio.contentDescription = "Aufnahme starten"
-                }
-                return@Thread
-            } catch (e: Exception) {
+            // *** WICHTIG: Segmente abrufen, nicht Plain-Text! ***
+            val jsonStr = try {
+                WhisperBridge.transcribeWavSegments(modelFile.absolutePath, wavFile.absolutePath, "de")
+            } catch (e: Throwable) {
                 ui {
                     etIn.setText("Whisper-Fehler: ${e.javaClass.simpleName}: ${e.message}")
                     btnAudio.isEnabled = true
-                    btnAudio.contentDescription = "Aufnahme starten"
                 }
                 return@Thread
             }
 
-            // 3) Ergebnis ins UI (optional auch in den Chat)
+            // JSON → Segmente
+            val segs = mutableListOf<Segment>()
+            try {
+                val arr = JSONArray(jsonStr)
+                for (i in 0 until arr.length()) {
+                    val o = arr.getJSONObject(i)
+                    segs.add(Segment(o.getLong("t0_ms"), o.getLong("t1_ms"), o.getString("text")))
+                }
+            } catch (e: Exception) {
+                ui {
+                    etIn.setText("Segment-Parsing-Fehler: ${e.message}\nAntwort war: $jsonStr")
+                    btnAudio.isEnabled = true
+                }
+                return@Thread
+            }
+
+            // 1) kurze Pausen zusammenkleben (z. B. < 120 ms)
+            val utterances = groupIntoUtterances(segs, gapMs = 120L)
+
+            // 2) *** neue Zeile, wenn Gap >= 200 ms ***
+            val text = buildString {
+                var lastEnd = -1L
+                for ((idx, u) in utterances.withIndex()) {
+                    if (idx > 0) {
+                        val gap = u.t0_ms - lastEnd
+                        if (gap >= 200L) append('\n') else append(' ')
+                    }
+                    append(u.text.trim())
+                    lastEnd = u.t1_ms
+                }
+            }.ifBlank { "[whisper] Kein Text erkannt" }
+
             ui {
-                val text = result.ifBlank { "[whisper] Kein Text erkannt" }
                 etIn.setText(text)
-
-                // Optional in die Chatliste pushen:
-                /*
-                startScreen.visibility = View.GONE
-                chatScreen.visibility = View.VISIBLE
-                conversation.add(Message("User", "[Sprachaufnahme]"))
-                conversation.add(Message("Bot", text))
-                chatAdapter.notifyDataSetChanged()
-                chatRecycler.scrollToPosition(conversation.size - 1)
-                */
-
                 btnAudio.isEnabled = true
-                btnAudio.contentDescription = "Aufnahme starten"
             }
         }.start()
     }
 
     private fun copyAssetToFiles(assetPath: String, overwrite: Boolean = false): File {
-        val fileName = assetPath.substringAfterLast('/')
-        val outFile = File(filesDir, fileName)
+        val outFile = File(filesDir, assetPath.substringAfterLast('/'))
         if (outFile.exists() && !overwrite) return outFile
-
-        assets.open(assetPath).use { inStream ->
-            outFile.outputStream().use { outStream ->
-                val buf = ByteArray(32 * 1024)
-                var r: Int
-                while (inStream.read(buf).also { r = it } != -1) {
-                    outStream.write(buf, 0, r)
-                }
-                outStream.flush()
-            }
+        assets.open(assetPath).use { input ->
+            outFile.outputStream().use { output -> input.copyTo(output) }
         }
         return outFile
+    }
+
+    // ---------- Datenklassen & einfache Gruppierung ----------
+    data class Segment(val t0_ms: Long, val t1_ms: Long, val text: String)
+    data class Utterance(var t0_ms: Long, var t1_ms: Long, var text: String)
+
+    /** Merged aufeinanderfolgende Segmente, wenn Pause < gapMs */
+    private fun groupIntoUtterances(segments: List<Segment>, gapMs: Long): List<Utterance> {
+        if (segments.isEmpty()) return emptyList()
+        val out = mutableListOf<Utterance>()
+        var cur = Utterance(segments[0].t0_ms, segments[0].t1_ms, segments[0].text)
+        for (i in 1 until segments.size) {
+            val s = segments[i]
+            val gap = s.t0_ms - segments[i - 1].t1_ms
+            if (gap < gapMs) {
+                cur.t1_ms = s.t1_ms
+                cur.text = (cur.text + " " + s.text).trim()
+            } else {
+                out.add(cur)
+                cur = Utterance(s.t0_ms, s.t1_ms, s.text)
+            }
+        }
+        out.add(cur)
+        return out
+    }
+
+    // nur falls du später RMS/Noise brauchst
+    private fun rmsDb(samples: ShortArray): Float {
+        if (samples.isEmpty()) return -120f
+        var sum = 0.0
+        for (s in samples) sum += (s * s).toDouble()
+        val mean = sum / samples.size
+        val rms = sqrt(mean)
+        val db = 20 * log10((rms / Short.MAX_VALUE).coerceAtMost(1.0))
+        return if (db.isFinite()) db.toFloat() else -120f
     }
 }
