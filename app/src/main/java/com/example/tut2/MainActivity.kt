@@ -121,6 +121,9 @@ class MainActivity : AppCompatActivity() {
             chatScreen.visibility = View.GONE
             startScreen.visibility = View.VISIBLE
             etIn.text.clear()
+
+            conversation.clear()
+            chatAdapter.notifyDataSetChanged()
         }
 
         // Mic-Button
